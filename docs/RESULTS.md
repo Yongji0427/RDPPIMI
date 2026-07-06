@@ -1,8 +1,6 @@
 # RDPPIMI Results
 
-## Headline Result
-
-The best released model is the RDPPIMI S4 3B weighted-pair run.
+Best released setting: S4 cold pair, 3B weighted-pair RD features, 5-fold mean.
 
 | Metric | Mean | Std | Min | Max |
 |---|---:|---:|---:|---:|
@@ -46,5 +44,3 @@ grad_clip_norm = 0.5
 seed = 42
 runseed = 123
 ```
-
-The older 3B mixed-selection summary had mean ROC-AUC 0.792758 and AUPR 0.756554. The released result above is the uniform 5-fold best-checkpoint result selected for public use.

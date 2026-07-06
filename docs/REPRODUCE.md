@@ -8,11 +8,28 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Install compatible PyTorch, PyTorch Geometric, RDKit, and CUDA builds for your machine.
+Install PyTorch, PyTorch Geometric, RDKit, and CUDA builds matching your machine.
 
 ## 2. Download Release Assets
 
-Download all files from release `v1.0-rdppimi-s4-3b`, then verify:
+Download all files from release `v1.0-rdppimi-s4-3b`.
+
+Required files:
+
+```text
+rdppimi-s4-3b-weighted-pair-fold1-best.pt
+rdppimi-s4-3b-weighted-pair-fold2-best.pt
+rdppimi-s4-3b-weighted-pair-fold3-best.pt
+rdppimi-s4-3b-weighted-pair-fold4-best.pt
+rdppimi-s4-3b-weighted-pair-fold5-best.pt
+proteinshake-ppi-esm2-35m-final.pt
+graphmvp-molecular-encoder-init.pt
+rdppimi-s4-3b-weighted-pair-run-configs.tar.gz
+rdppimi-s4-3b-weighted-pair-minimal-assets.tar.gz
+SHA256SUMS.txt
+```
+
+Verify checksums:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
@@ -26,37 +43,19 @@ tar -xzf rdppimi-s4-3b-weighted-pair-run-configs.tar.gz -C release_assets
 tar -xzf rdppimi-s4-3b-weighted-pair-minimal-assets.tar.gz -C release_assets
 ```
 
-`rdppimi-s4-3b-weighted-pair-run-configs.tar.gz` contains one shared `training_config.json`, plus `fold_overrides.csv` and `fold_metrics.csv`. The five folds share the same hyperparameters; fold-specific rows only record the split id, fold-specific weighted-asset path, selected checkpoint file, best epoch, and fold metrics.
+The run-config archive contains one shared `training_config.json`; `fold_overrides.csv` only records fold-specific split ids, weighted-asset paths, selected checkpoint files, best epochs, and fold metrics.
 
-## 3. Verify Weight Files
+## 3. Model Files
 
-```bash
-python scripts/verify_release_assets.py --asset-dir /path/to/downloaded/release/files
-```
+- `proteinshake-ppi-esm2-35m-final.pt`: ProteinShake ESM2-35M PPI prior model.
+- `graphmvp-molecular-encoder-init.pt`: molecular encoder initialization.
+- `rdppimi-s4-3b-weighted-pair-fold*-best.pt`: one RDPPIMI checkpoint per cross-validation fold.
 
-This checks the expected filenames, verifies `SHA256SUMS.txt`, and confirms that PyTorch can load each `.pt` file.
+ProteinShake uses `facebook/esm2_t12_35M_UR50D`; download it from Hugging Face or provide a local model cache.
 
-## 4. ProteinShake Prior Smoke Test
+## 4. RDPPIMI Fold Loading
 
-ProteinShake uses `facebook/esm2_t12_35M_UR50D` as its ESM2 backbone. The released `proteinshake-ppi-esm2-35m-final.pt` contains the fine-tuned sequence encoder and pair head, while the Hugging Face backbone files should be obtained through the standard model cache or a local mirror.
-
-Expected ProteinShake outputs for a protein pair are:
-
-```text
-pair_logits.npy
-pair_probs.npy
-residue_scores_A.npy
-residue_scores_B.npy
-residue_weights_A.npy
-residue_weights_B.npy
-metadata.json
-```
-
-Residue weights are normalized to sum to 1 for each protein chain.
-
-## 5. RDPPIMI Fold Loading
-
-Instantiate the PPIMI model with:
+Use the shared configuration:
 
 ```text
 protein_feature_source = weighted_pair_embedding
@@ -75,4 +74,4 @@ state_dict = torch.load("rdppimi-s4-3b-weighted-pair-fold1-best.pt", map_locatio
 model.load_state_dict(state_dict)
 ```
 
-Full metric reproduction requires the released fold-specific weighted-pair assets and the original MultiPPIMI fold definitions.
+Full metric reproduction requires the released fold-specific weighted-pair assets and MultiPPIMI fold definitions.
