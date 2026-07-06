@@ -26,6 +26,8 @@ tar -xzf rdppimi-s4-3b-weighted-pair-run-configs.tar.gz -C release_assets
 tar -xzf rdppimi-s4-3b-weighted-pair-minimal-assets.tar.gz -C release_assets
 ```
 
+`rdppimi-s4-3b-weighted-pair-run-configs.tar.gz` contains one shared `training_config.json`, plus `fold_overrides.csv` and `fold_metrics.csv`. The five folds share the same hyperparameters; fold-specific rows only record the split id, fold-specific weighted-asset path, selected checkpoint file, best epoch, and fold metrics.
+
 ## 3. Verify Weight Files
 
 ```bash
