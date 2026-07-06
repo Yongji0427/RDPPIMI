@@ -22,7 +22,9 @@ for candidate in (str(PROJECT_ROOT), str(SRC_ROOT), str(PROJECT_ROOT / 'scripts'
 from audit_rd_inputs import (  # noqa: E402
     build_official_split,
     build_protein_audit,
+    endpoint_protein_sets,
     induce_sampled_train_pairs,
+    induce_sidewise_sampled_train_pairs,
     read_runnable_pair_df,
     run_cdhit,
     write_fasta,
@@ -32,7 +34,7 @@ from support.run_s4_trainonly_sampling_compare_rd_fixed_weighted_35M import (  #
     unique_train_proteins,
 )
 
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / 'outputs' / 'rd_scalers' / 'fold_specific'
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / 'outputs' / 'rd_scalers' / 'fold_specific_sidewise_intersection'
 DEFAULT_PYTHON = Path('python')
 DEFAULT_WEIGHT_INDEX = PROJECT_ROOT / 'fixed_residue_softmax_weights' / 't0p7' / 'fixed_residue_softmax_weight_index.csv'
 TRANSITIONS = ('8M->35M', '35M->150M', '150M->650M', '650M->3B')
@@ -80,6 +82,14 @@ def scaler_paths_complete(scaler_dir: Path) -> bool:
     return all(any(transition.replace('->', '-') in name for name in names) for transition in TRANSITIONS)
 
 
+def existing_scaler_pair_mode(scaler_dir: Path) -> str:
+    metadata_path = scaler_dir / 'metadata.json'
+    if not metadata_path.exists():
+        return ''
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    return str(metadata.get('cdhit_pair_mode', 'pooled'))
+
+
 def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, sequence_map: Dict[str, str]) -> Dict[str, object]:
     fold_root = args.output_root / f'fold{fold}'
     fold_root.mkdir(parents=True, exist_ok=True)
@@ -97,13 +107,58 @@ def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, 
     if rd_candidate_pair_df.empty:
         raise RuntimeError(f'fold{fold} has zero strict train-only RD candidate pairs after excluding valid/test proteins')
 
-    fasta_path = fold_root / 'rd_fit_train_only_no_valid_test_proteins.fasta'
-    cdhit_prefix = fold_root / f'rd_fit_train_only_no_valid_test_cdhit_c{str(args.cdhit_threshold).replace(".", "p")}'
-    write_fasta(rd_candidate_proteins, sequence_map, fasta_path)
-    representatives, cluster_df = run_cdhit(fasta_path, cdhit_prefix, args.cdhit_threshold)
-    cluster_df.to_csv(fold_root / 'rd_fit_cdhit_clusters.csv', index=False)
+    threshold_label = str(args.cdhit_threshold).replace('.', 'p')
+    cluster_csv = fold_root / 'rd_fit_cdhit_clusters.csv'
+    if args.cdhit_pair_mode == 'sidewise_intersection':
+        candidate_proteins_a, candidate_proteins_b = endpoint_protein_sets(rd_candidate_pair_df)
+        fasta_path_a = fold_root / 'rd_fit_train_only_no_valid_test_proteins_A.fasta'
+        fasta_path_b = fold_root / 'rd_fit_train_only_no_valid_test_proteins_B.fasta'
+        cdhit_prefix_a = fold_root / f'rd_fit_train_only_no_valid_test_A_cdhit_c{threshold_label}'
+        cdhit_prefix_b = fold_root / f'rd_fit_train_only_no_valid_test_B_cdhit_c{threshold_label}'
+        write_fasta(candidate_proteins_a, sequence_map, fasta_path_a)
+        write_fasta(candidate_proteins_b, sequence_map, fasta_path_b)
+        representatives_a, cluster_df_a = run_cdhit(fasta_path_a, cdhit_prefix_a, args.cdhit_threshold)
+        representatives_b, cluster_df_b = run_cdhit(fasta_path_b, cdhit_prefix_b, args.cdhit_threshold)
+        pd.concat(
+            [
+                cluster_df_a.assign(endpoint='A'),
+                cluster_df_b.assign(endpoint='B'),
+            ],
+            ignore_index=True,
+        ).to_csv(cluster_csv, index=False)
+        pairs_a, pairs_b, sampled_pairs = induce_sidewise_sampled_train_pairs(
+            rd_candidate_pair_df,
+            set(representatives_a),
+            set(representatives_b),
+        )
+        representatives = sorted(set(representatives_a) | set(representatives_b))
+        selection_label = 'official_train_fold_strict_sidewise_cdhit_pair_intersection'
+        cdhit_artifacts = {
+            'rd_fit_train_fasta_A': str(fasta_path_a),
+            'rd_fit_train_fasta_B': str(fasta_path_b),
+            'rd_fit_cdhit_output_A': str(cdhit_prefix_a),
+            'rd_fit_cdhit_output_B': str(cdhit_prefix_b),
+            'cdhit_representative_proteins_A': sorted(representatives_a),
+            'cdhit_representative_proteins_B': sorted(representatives_b),
+            'cdhit_representative_protein_count_A': int(len(representatives_a)),
+            'cdhit_representative_protein_count_B': int(len(representatives_b)),
+            'rd_fit_pair_count_A': int(len(pairs_a)),
+            'rd_fit_pair_count_B': int(len(pairs_b)),
+        }
+    else:
+        fasta_path = fold_root / 'rd_fit_train_only_no_valid_test_proteins.fasta'
+        cdhit_prefix = fold_root / f'rd_fit_train_only_no_valid_test_cdhit_c{threshold_label}'
+        write_fasta(rd_candidate_proteins, sequence_map, fasta_path)
+        representatives, cluster_df = run_cdhit(fasta_path, cdhit_prefix, args.cdhit_threshold)
+        cluster_df.assign(endpoint='pooled').to_csv(cluster_csv, index=False)
+        sampled_pairs = induce_sampled_train_pairs(rd_candidate_pair_df, set(representatives))
+        selection_label = 'official_train_fold_strict_pooled_cdhit_representative_pairs'
+        cdhit_artifacts = {
+            'rd_fit_train_fasta': str(fasta_path),
+            'rd_fit_cdhit_output': str(cdhit_prefix),
+            'cdhit_representative_proteins': sorted(representatives),
+        }
 
-    sampled_pairs = induce_sampled_train_pairs(rd_candidate_pair_df, set(representatives))
     if not sampled_pairs:
         raise RuntimeError(f'CD-HIT fold{fold} selected zero RD fit pairs')
     valid_overlap = sorted(set(sampled_pairs) & set(split.mapped_valid_pairs))
@@ -123,10 +178,11 @@ def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, 
         'eval_setting': args.eval_setting,
         'fold': int(fold),
         'cdhit_threshold': float(args.cdhit_threshold),
+        'cdhit_pair_mode': args.cdhit_pair_mode,
         'cdhit_scope': 'rd_scaler_fit_only',
         'ppimi_train_filtering': False,
         'official_valid_test_used_for_rd_fit': False,
-        'rd_fit_pair_selection': 'official_train_fold_strict_train_only_proteins_cdhit_representative_pairs',
+        'rd_fit_pair_selection': selection_label,
         'original_train_pair_count': int(len(split.mapped_train_pairs)),
         'original_valid_pair_count': int(len(split.mapped_valid_pairs)),
         'original_test_pair_count': int(len(split.mapped_test_pairs)),
@@ -144,10 +200,9 @@ def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, 
         'strict_valid_test_protein_exclusion': True,
         'rd_candidate_proteins': rd_candidate_proteins,
         'excluded_valid_test_proteins': sorted(valid_test_proteins),
-        'rd_fit_train_fasta': str(fasta_path),
-        'rd_fit_cdhit_output': str(cdhit_prefix),
-        'rd_fit_cdhit_clusters_csv': str(fold_root / 'rd_fit_cdhit_clusters.csv'),
+        'rd_fit_cdhit_clusters_csv': str(cluster_csv),
         'sampled_pair_ids': sampled_pairs,
+        **cdhit_artifacts,
     }
     write_json(fold_root / 'rd_only_cdhit_plan.json', plan)
     return plan
@@ -158,14 +213,22 @@ def train_fold_scalers(args: argparse.Namespace, fold: int, plan: Dict[str, obje
     scaler_dir = fold_root / 'scalers'
     log_path = fold_root / 'train_rd_scalers.log'
     if args.resume and scaler_paths_complete(scaler_dir) and not args.restart:
-        return {
-            'fold': fold,
-            'status': 'skipped_completed',
-            'scaler_dir': str(scaler_dir),
-            'log_path': str(log_path),
-            'message': 'existing complete scaler set found',
-            **{k: plan[k] for k in ('rd_fit_pair_count', 'rd_fit_residue_row_count', 'rd_fit_pair_allowlist_csv', 'rd_fit_pair_allowlist_sha256')},
-        }
+        existing_mode = existing_scaler_pair_mode(scaler_dir)
+        if existing_mode == plan['cdhit_pair_mode']:
+            return {
+                'fold': fold,
+                'status': 'skipped_completed',
+                'scaler_dir': str(scaler_dir),
+                'log_path': str(log_path),
+                'message': 'existing complete scaler set found',
+                'cdhit_pair_mode': plan['cdhit_pair_mode'],
+                'rd_fit_pair_selection': plan['rd_fit_pair_selection'],
+                **{k: plan[k] for k in ('rd_fit_pair_count', 'rd_fit_residue_row_count', 'rd_fit_pair_allowlist_csv', 'rd_fit_pair_allowlist_sha256')},
+            }
+        raise RuntimeError(
+            f'Existing scaler pair mode is {existing_mode!r}, but the requested mode is '
+            f'{plan["cdhit_pair_mode"]!r}; use a new output root or pass --restart'
+        )
     if args.restart and scaler_dir.exists():
         import shutil
         shutil.rmtree(scaler_dir)
@@ -200,6 +263,8 @@ def train_fold_scalers(args: argparse.Namespace, fold: int, plan: Dict[str, obje
             'scaler_dir': str(scaler_dir),
             'log_path': str(log_path),
             'command': ' '.join(cmd),
+            'cdhit_pair_mode': plan['cdhit_pair_mode'],
+            'rd_fit_pair_selection': plan['rd_fit_pair_selection'],
             **{k: plan[k] for k in ('rd_fit_pair_count', 'rd_fit_residue_row_count', 'rd_fit_pair_allowlist_csv', 'rd_fit_pair_allowlist_sha256')},
         }
 
@@ -222,6 +287,8 @@ def train_fold_scalers(args: argparse.Namespace, fold: int, plan: Dict[str, obje
         'regressor_type': args.regressor_type,
         'pca_type': args.pca_type,
         'pcr_incremental': bool(args.regressor_type == 'pcr' and args.pca_type == 'incremental'),
+        'cdhit_pair_mode': plan['cdhit_pair_mode'],
+        'rd_fit_pair_selection': plan['rd_fit_pair_selection'],
         **{k: plan[k] for k in ('rd_fit_pair_count', 'rd_fit_residue_row_count', 'rd_fit_pair_allowlist_csv', 'rd_fit_pair_allowlist_sha256')},
     }
     if status != 'success':
@@ -230,6 +297,12 @@ def train_fold_scalers(args: argparse.Namespace, fold: int, plan: Dict[str, obje
     metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
     if metadata.get('cdhit_scope') != 'rd_scaler_fit_only' or metadata.get('ppimi_train_filtering') != 'false':
         raise RuntimeError(f'RD scaler metadata guard failed for fold{fold}: {metadata_path}')
+    metadata.update({
+        'cdhit_pair_mode': plan['cdhit_pair_mode'],
+        'rd_fit_pair_selection': plan['rd_fit_pair_selection'],
+        'rd_fit_plan_json': str(fold_root / 'rd_only_cdhit_plan.json'),
+    })
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding='utf-8')
     record['message'] = 'RD-only CD-HIT fold-specific scalers trained successfully'
     return record
 
@@ -244,6 +317,8 @@ def write_campaign_outputs(output_root: Path, records: List[Dict[str, object]]) 
         writer.writeheader()
         for row in records:
             writer.writerow({key: row.get(key, '') for key in fieldnames})
+    pair_mode = records[-1].get('cdhit_pair_mode', 'unknown') if records else 'unknown'
+    selection_label = records[-1].get('rd_fit_pair_selection', 'unknown') if records else 'unknown'
     lines = [
         '# Fold-Specific RD-only CD-HIT Scaler Campaign',
         '',
@@ -251,6 +326,8 @@ def write_campaign_outputs(output_root: Path, records: List[Dict[str, object]]) 
         f'- output_root: `{output_root}`',
         '- cdhit_scope: `rd_scaler_fit_only`',
         '- ppimi_train_filtering: `false`',
+        f'- cdhit_pair_mode: `{pair_mode}`',
+        f'- rd_fit_pair_selection: `{selection_label}`',
         '- downstream PPIMI must not use `--train_pair_allowlist_csv`.',
         '',
         '| Fold | Status | RD Fit Pairs | RD Fit Residue Rows | Scaler Dir |',
@@ -270,6 +347,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--eval_setting', type=str, default='S4')
     parser.add_argument('--folds', nargs='*', default=['all'])
     parser.add_argument('--cdhit_threshold', type=float, default=0.5)
+    parser.add_argument(
+        '--cdhit_pair_mode',
+        type=str,
+        default='sidewise_intersection',
+        choices=['sidewise_intersection', 'pooled'],
+    )
     parser.add_argument('--weight_index_csv', type=Path, default=DEFAULT_WEIGHT_INDEX)
     parser.add_argument('--rd_project_root', type=Path, default=Path('external/reverse_distillation'))
     parser.add_argument('--python', type=Path, default=DEFAULT_PYTHON)

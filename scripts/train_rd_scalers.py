@@ -22,7 +22,9 @@ for candidate in (str(PROJECT_ROOT), str(SRC_ROOT), str(SCRIPTS_ROOT), str(SUPPO
 from audit_rd_inputs import (  # noqa: E402
     build_official_split,
     build_protein_audit,
+    endpoint_protein_sets,
     induce_sampled_train_pairs,
+    induce_sidewise_sampled_train_pairs,
     read_runnable_pair_df,
     run_cdhit,
     write_fasta,
@@ -43,9 +45,10 @@ from support.train_fold_specific_rd_only_cdhit_scalers import (  # noqa: E402
     write_json,
 )
 
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / 'outputs' / 'rd_scalers' / 'trainpair_overlap'
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / 'outputs' / 'rd_scalers' / 'trainpair_sidewise_intersection'
 DEFAULT_RD_PROJECT_ROOT = Path('external/reverse_distillation')
-SELECTION_LABEL = 'official_train_fold_cdhit_representative_pairs_overlap_allowed'
+POOLED_SELECTION_LABEL = 'official_train_fold_pooled_cdhit_representative_pairs_overlap_allowed'
+SIDEWISE_SELECTION_LABEL = 'official_train_fold_sidewise_cdhit_pair_intersection_overlap_allowed'
 
 
 def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, sequence_map: Dict[str, str]) -> Dict[str, object]:
@@ -66,13 +69,58 @@ def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, 
     if not train_proteins:
         raise RuntimeError(f'fold{fold} has zero RD candidate train proteins')
 
-    fasta_path = fold_root / 'rd_fit_official_train_pairlevel_proteins.fasta'
-    cdhit_prefix = fold_root / f'rd_fit_official_train_pairlevel_cdhit_c{str(args.cdhit_threshold).replace(".", "p")}'
-    write_fasta(train_proteins, sequence_map, fasta_path)
-    representatives, cluster_df = run_cdhit(fasta_path, cdhit_prefix, args.cdhit_threshold)
-    cluster_df.to_csv(fold_root / 'rd_fit_cdhit_clusters.csv', index=False)
+    threshold_label = str(args.cdhit_threshold).replace('.', 'p')
+    cluster_csv = fold_root / 'rd_fit_cdhit_clusters.csv'
+    if args.cdhit_pair_mode == 'sidewise_intersection':
+        train_proteins_a, train_proteins_b = endpoint_protein_sets(rd_candidate_pair_df)
+        fasta_path_a = fold_root / 'rd_fit_official_train_pairlevel_proteins_A.fasta'
+        fasta_path_b = fold_root / 'rd_fit_official_train_pairlevel_proteins_B.fasta'
+        cdhit_prefix_a = fold_root / f'rd_fit_official_train_pairlevel_A_cdhit_c{threshold_label}'
+        cdhit_prefix_b = fold_root / f'rd_fit_official_train_pairlevel_B_cdhit_c{threshold_label}'
+        write_fasta(train_proteins_a, sequence_map, fasta_path_a)
+        write_fasta(train_proteins_b, sequence_map, fasta_path_b)
+        representatives_a, cluster_df_a = run_cdhit(fasta_path_a, cdhit_prefix_a, args.cdhit_threshold)
+        representatives_b, cluster_df_b = run_cdhit(fasta_path_b, cdhit_prefix_b, args.cdhit_threshold)
+        pd.concat(
+            [
+                cluster_df_a.assign(endpoint='A'),
+                cluster_df_b.assign(endpoint='B'),
+            ],
+            ignore_index=True,
+        ).to_csv(cluster_csv, index=False)
+        pairs_a, pairs_b, sampled_pairs = induce_sidewise_sampled_train_pairs(
+            rd_candidate_pair_df,
+            set(representatives_a),
+            set(representatives_b),
+        )
+        representatives = sorted(set(representatives_a) | set(representatives_b))
+        selection_label = SIDEWISE_SELECTION_LABEL
+        cdhit_artifacts = {
+            'rd_fit_train_fasta_A': str(fasta_path_a),
+            'rd_fit_train_fasta_B': str(fasta_path_b),
+            'rd_fit_cdhit_output_A': str(cdhit_prefix_a),
+            'rd_fit_cdhit_output_B': str(cdhit_prefix_b),
+            'cdhit_representative_proteins_A': sorted(representatives_a),
+            'cdhit_representative_proteins_B': sorted(representatives_b),
+            'cdhit_representative_protein_count_A': int(len(representatives_a)),
+            'cdhit_representative_protein_count_B': int(len(representatives_b)),
+            'rd_fit_pair_count_A': int(len(pairs_a)),
+            'rd_fit_pair_count_B': int(len(pairs_b)),
+        }
+    else:
+        fasta_path = fold_root / 'rd_fit_official_train_pairlevel_proteins.fasta'
+        cdhit_prefix = fold_root / f'rd_fit_official_train_pairlevel_cdhit_c{threshold_label}'
+        write_fasta(train_proteins, sequence_map, fasta_path)
+        representatives, cluster_df = run_cdhit(fasta_path, cdhit_prefix, args.cdhit_threshold)
+        cluster_df.assign(endpoint='pooled').to_csv(cluster_csv, index=False)
+        sampled_pairs = induce_sampled_train_pairs(rd_candidate_pair_df, set(representatives))
+        selection_label = POOLED_SELECTION_LABEL
+        cdhit_artifacts = {
+            'rd_fit_train_fasta': str(fasta_path),
+            'rd_fit_cdhit_output': str(cdhit_prefix),
+            'cdhit_representative_proteins': sorted(representatives),
+        }
 
-    sampled_pairs = induce_sampled_train_pairs(rd_candidate_pair_df, set(representatives))
     if not sampled_pairs:
         raise RuntimeError(f'CD-HIT fold{fold} selected zero RD fit train pairs')
     valid_overlap = sorted(set(sampled_pairs) & set(split.mapped_valid_pairs))
@@ -88,11 +136,12 @@ def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, 
         'eval_setting': args.eval_setting,
         'fold': int(fold),
         'cdhit_threshold': float(args.cdhit_threshold),
+        'cdhit_pair_mode': args.cdhit_pair_mode,
         'cdhit_scope': 'rd_scaler_fit_only',
         'ppimi_train_filtering': False,
         'official_valid_test_used_for_rd_fit': False,
         'pair_overlap_allowed_for_rd_fit': True,
-        'rd_fit_pair_selection': SELECTION_LABEL,
+        'rd_fit_pair_selection': selection_label,
         'original_train_pair_count': int(len(split.mapped_train_pairs)),
         'original_valid_pair_count': int(len(split.mapped_valid_pairs)),
         'original_test_pair_count': int(len(split.mapped_test_pairs)),
@@ -113,14 +162,12 @@ def build_fold_plan(args: argparse.Namespace, fold: int, pair_df: pd.DataFrame, 
         'strict_valid_test_protein_exclusion': False,
         'pair_level_valid_test_overlap_exclusion': False,
         'train_pair_only_cdhit': True,
-        'rd_fit_train_fasta': str(fasta_path),
-        'rd_fit_cdhit_output': str(cdhit_prefix),
-        'rd_fit_cdhit_clusters_csv': str(fold_root / 'rd_fit_cdhit_clusters.csv'),
+        'rd_fit_cdhit_clusters_csv': str(cluster_csv),
         'sampled_pair_ids': sampled_pairs,
-        'cdhit_representative_proteins': sorted(representatives),
         'train_proteins': train_proteins,
         'valid_test_proteins_not_excluded': valid_test_proteins,
         'shared_train_valid_test_proteins_allowed_for_rd_fit': shared_proteins,
+        **cdhit_artifacts,
     }
     write_json(fold_root / 'rd_only_cdhit_trainpair_plan.json', plan)
     return plan
@@ -132,7 +179,8 @@ def annotate_scaler_metadata(output_root: Path, fold: int, plan: Dict[str, objec
         return
     payload = json.loads(metadata_path.read_text(encoding='utf-8'))
     payload.update({
-        'rd_fit_pair_selection': SELECTION_LABEL,
+        'cdhit_pair_mode': plan['cdhit_pair_mode'],
+        'rd_fit_pair_selection': plan['rd_fit_pair_selection'],
         'strict_valid_test_protein_exclusion': False,
         'pair_level_valid_test_overlap_exclusion': False,
         'train_pair_only_cdhit': True,
@@ -167,6 +215,8 @@ def write_outputs(output_root: Path, records: List[Dict[str, object]]) -> None:
         writer.writeheader()
         for row in records:
             writer.writerow({key: row.get(key, '') for key in fieldnames})
+    pair_mode = records[-1].get('cdhit_pair_mode', 'unknown') if records else 'unknown'
+    selection_label = records[-1].get('rd_fit_pair_selection', 'unknown') if records else 'unknown'
     lines = [
         '# Train-Pair-Only RD-CDHIT Overlap-Allowed Fold-Specific Scalers',
         '',
@@ -176,7 +226,8 @@ def write_outputs(output_root: Path, records: List[Dict[str, object]]) -> None:
         '- ppimi_train_filtering: `false`',
         '- strict_valid_test_protein_exclusion: `false`',
         '- pair_overlap_allowed_for_rd_fit: `true`',
-        f'- rd_fit_pair_selection: `{SELECTION_LABEL}`',
+        f'- cdhit_pair_mode: `{pair_mode}`',
+        f'- rd_fit_pair_selection: `{selection_label}`',
         '',
         '| Fold | Status | RD fit pairs | RD fit residue rows | Candidate pairs before CD-HIT | CD-HIT reps |',
         '| ---: | --- | ---: | ---: | ---: | ---: |',
@@ -196,6 +247,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--folds', nargs='*', default=['all'])
     parser.add_argument('--eval_setting', type=str, default='S4')
     parser.add_argument('--cdhit_threshold', type=float, default=0.5)
+    parser.add_argument(
+        '--cdhit_pair_mode',
+        type=str,
+        default='sidewise_intersection',
+        choices=['sidewise_intersection', 'pooled'],
+    )
     parser.add_argument('--python', type=Path, default=DEFAULT_PYTHON)
     parser.add_argument('--weight_index_csv', type=Path, default=DEFAULT_WEIGHT_INDEX)
     parser.add_argument('--rd_project_root', type=Path, default=DEFAULT_RD_PROJECT_ROOT)
@@ -228,7 +285,7 @@ def main() -> int:
                     'rd_fit_pair_allowlist_sha256', 'rd_candidate_pair_count_before_cdhit',
                     'cdhit_representative_protein_count', 'strict_valid_test_protein_exclusion',
                     'rd_fit_pair_selection', 'pair_overlap_allowed_for_rd_fit', 'valid_pair_overlap_count',
-                    'test_pair_overlap_count', 'train_valid_test_pair_overlap_count_allowed',
+                    'test_pair_overlap_count', 'train_valid_test_pair_overlap_count_allowed', 'cdhit_pair_mode',
                 )},
             }
         else:
@@ -238,11 +295,9 @@ def main() -> int:
                 'rd_candidate_pair_count_before_cdhit': plan['rd_candidate_pair_count_before_cdhit'],
                 'cdhit_representative_protein_count': plan['cdhit_representative_protein_count'],
                 'strict_valid_test_protein_exclusion': False,
-        'pair_level_valid_test_overlap_exclusion': False,
-        'pair_overlap_allowed_for_rd_fit': True,
-        'valid_pair_overlap_count': plan['valid_pair_overlap_count'],
-        'test_pair_overlap_count': plan['test_pair_overlap_count'],
-                'rd_fit_pair_selection': SELECTION_LABEL,
+                'pair_level_valid_test_overlap_exclusion': False,
+                'cdhit_pair_mode': plan['cdhit_pair_mode'],
+                'rd_fit_pair_selection': plan['rd_fit_pair_selection'],
                 'pair_overlap_allowed_for_rd_fit': True,
                 'valid_pair_overlap_count': plan['valid_pair_overlap_count'],
                 'test_pair_overlap_count': plan['test_pair_overlap_count'],

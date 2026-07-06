@@ -24,7 +24,7 @@ DEFAULT_OUTPUT_ROOT = (
     PROJECT_ROOT
     / 'outputs'
     / 'rd_scalers'
-    / 'trainpair_overlap_pcr_incremental'
+    / 'trainpair_sidewise_intersection_pcr_incremental'
 )
 
 
@@ -88,7 +88,7 @@ def main() -> int:
                     'rd_fit_pair_allowlist_sha256', 'rd_candidate_pair_count_before_cdhit',
                     'cdhit_representative_protein_count', 'strict_valid_test_protein_exclusion',
                     'rd_fit_pair_selection', 'pair_overlap_allowed_for_rd_fit', 'valid_pair_overlap_count',
-                    'test_pair_overlap_count', 'train_valid_test_pair_overlap_count_allowed',
+                    'test_pair_overlap_count', 'train_valid_test_pair_overlap_count_allowed', 'cdhit_pair_mode',
                 )},
             }
         else:
@@ -102,7 +102,8 @@ def main() -> int:
                 'pair_overlap_allowed_for_rd_fit': True,
                 'valid_pair_overlap_count': plan['valid_pair_overlap_count'],
                 'test_pair_overlap_count': plan['test_pair_overlap_count'],
-                'rd_fit_pair_selection': base.SELECTION_LABEL,
+                'cdhit_pair_mode': plan['cdhit_pair_mode'],
+                'rd_fit_pair_selection': plan['rd_fit_pair_selection'],
                 'train_valid_test_pair_overlap_count_allowed': plan['train_valid_test_pair_overlap_count_allowed'],
                 'regressor_type': 'pcr',
                 'pca_type': 'incremental',
@@ -118,9 +119,10 @@ def main() -> int:
             '- pca_type: `incremental`',
             '- johnstone_threshold_active: `true` when present in scaler metadata',
             '- cdhit_scope: `rd_scaler_fit_only`',
+            f'- cdhit_pair_mode: `{plan["cdhit_pair_mode"]}`',
             '- ppimi_train_filtering: `false`',
             '- pair_overlap_allowed_for_rd_fit: `true`',
-            '- source_linear_baseline_root: `outputs/rd_scalers/trainpair_overlap`',
+            '- source_linear_baseline_root: `outputs/rd_scalers/trainpair_sidewise_intersection`',
         ]
         (args.output_root / 'PCR_INCREMENTAL_LAUNCHER_NOTE.md').write_text('\n'.join(note) + '\n', encoding='utf-8')
         if record.get('status') == 'failed':

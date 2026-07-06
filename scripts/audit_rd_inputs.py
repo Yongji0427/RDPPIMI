@@ -294,6 +294,28 @@ def induce_sampled_train_pairs(train_pair_df: pd.DataFrame, retained_protein_set
     return sampled['pair_id'].tolist()
 
 
+def endpoint_protein_sets(train_pair_df: pd.DataFrame) -> Tuple[List[str], List[str]]:
+    proteins_a = sorted(set(train_pair_df['proteinA_id']))
+    proteins_b = sorted(set(train_pair_df['proteinB_id']))
+    return proteins_a, proteins_b
+
+
+def induce_sidewise_sampled_train_pairs(
+    train_pair_df: pd.DataFrame,
+    retained_protein_a_set: set[str],
+    retained_protein_b_set: set[str],
+) -> Tuple[List[str], List[str], List[str]]:
+    pairs_a = train_pair_df[
+        train_pair_df['proteinA_id'].isin(retained_protein_a_set)
+    ]['pair_id'].tolist()
+    pairs_b = train_pair_df[
+        train_pair_df['proteinB_id'].isin(retained_protein_b_set)
+    ]['pair_id'].tolist()
+    pairs_b_set = set(pairs_b)
+    intersection = [pair_id for pair_id in pairs_a if pair_id in pairs_b_set]
+    return pairs_a, pairs_b, intersection
+
+
 def choose_random_plans(
     train_pair_df: pd.DataFrame,
     train_proteins: List[str],
