@@ -1,11 +1,17 @@
 # Reproduce The Release
 
+This guide covers the released downstream model and precomputed weighted-pair
+features. RD scaler fitting and recursive feature-generation code are currently
+excluded from the public snapshot. The released checkpoints and supporting
+asset files remain available in `v1.0-rdppimi-s4-3b`.
+
 ## 1. Install
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
 Install PyTorch, PyTorch Geometric, RDKit, and CUDA builds matching your machine.

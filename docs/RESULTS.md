@@ -2,6 +2,10 @@
 
 Best released setting: S4 cold pair, 3B weighted-pair RD features, 5-fold mean.
 
+These records describe the historical `v1.0-rdppimi-s4-3b` release and its
+precomputed features. Sensitivity is recall. Threshold-dependent metrics use
+the released implementation's per-test-set F1-optimal threshold.
+
 | Metric | Mean | Std | Min | Max |
 |---|---:|---:|---:|---:|
 | ROC-AUC | 0.802388 | 0.081969 | 0.694609 | 0.908522 |
