@@ -1,6 +1,8 @@
 <div align="center">
 
-<img src="assets/readme-banner.svg" alt="RDPPIMI combines compound features and protein-pair representations to predict interaction modulators" width="100%">
+<h1>RDPPIMI</h1>
+
+<img src="assets/overview.png" alt="RDPPIMI framework with the overall architecture, IPGA, and reverse distillation fusion" width="100%">
 
 **Interface priors and multi-scale protein representations for protein–protein interaction modulator prediction**
 
