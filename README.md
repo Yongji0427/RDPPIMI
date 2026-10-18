@@ -83,7 +83,7 @@ Downstream training and evaluation require the appropriate MultiPPIMI fold defin
 
 ## Release scope
 
-The public snapshot includes **PPIMI downstream modeling**, **interface-prior processing**, **precomputed-feature consumption**, and **release verification**. RD loaders used for scaler fitting, scaler-training scripts, and recursive RD feature-construction code are currently excluded. Use the precomputed assets for the released model configuration.
+The public snapshot includes **PPIMI downstream modeling**, **interface-prior processing**, **precomputed-feature consumption**, and **release verification**. RD loaders used for scaler fitting, scaler-training scripts, and recursive RD feature-construction code will be released in a future update. Use the precomputed assets for the released model configuration.
 
 ```text
 RDPPIMI/
